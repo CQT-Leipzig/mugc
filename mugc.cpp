@@ -297,6 +297,7 @@ int main(int argc, char *argv[]) {
     float print_hours = 1.0;
     clock_t delta_t = clock();
     int printed = 0;
+    int crossed_tenth = psweeps/10;
     local_tunnel_events = 0;
     for (int i = 0; i < v_local_hist.size(); i++) v_local_hist.at(i) = 0;
 
@@ -314,17 +315,31 @@ int main(int argc, char *argv[]) {
       timeseries << std::fixed << std::setprecision(7);
       timeseries << e << "\n";
 
-      if (my_rank==0 && !exported_state[n]) {
-        sys.export_config(s_export_path+string_printf("/snapshots/n_%05d.dat",int(n)));
-        exported_state[int(n)] = true;
-      }
+      // snapshots from rank 0 and logging
+      if (my_rank == 0) {
+        if (!exported_state[n]) {
+          sys.export_config(s_export_path+string_printf("/snapshots/n_%05d.dat",int(n)));
+          exported_state[int(n)] = true;
+        }
 
-      clock_t now = clock();
-      if ((float)(now - delta_t)/CLOCKS_PER_SEC/3600.0 >= print_hours || printed < 5) {
-        printed+=1;
-        delta_t = now;
-        if (my_rank==0) printf("%ld / %ld ~ %3.1f%%\n", i, psweeps, i/float(psweeps)*100.0f);
-        if (my_rank==0) print_time_since(start_time);
+        clock_t now = clock();
+        bool print_now = false;
+        if (i >= crossed_tenth) {
+          crossed_tenth += psweeps/10;
+          print_now = true;
+        }
+        if ((float)(now - delta_t)/CLOCKS_PER_SEC/3600.0 >= print_hours) {
+          print_now = true;
+        }
+        if (printed < 5) {
+          print_now = true;
+        }
+        if (print_now) {
+          printed+=1;
+          delta_t = now;
+          printf("%ld / %ld ~ %3.1f%%\n", i, psweeps, i/float(psweeps)*100.0f);
+          print_time_since(start_time);
+        }
       }
     }
     timeseries.close();
@@ -332,6 +347,8 @@ int main(int argc, char *argv[]) {
   }
 
   write_histogram(v_local_hist, s_export_path + string_printf("/production_hist/hist_%03d.dat", my_rank));
+
+  if (my_rank == 0) printf ("waiting for all threads to finish");
 
   MPI_Barrier(MPI_COMM_WORLD);
   MPI_Reduce(v_local_hist.data(), v_global_hist.data(), v_local_hist.size(), MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
