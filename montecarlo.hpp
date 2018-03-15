@@ -15,11 +15,11 @@
 // METROPOLIS //
 // ------------------------------------------------------------------ //
 
-void metro_step(asystem &sys, long sweeps, long mcs, double beta = 2.5) {
+void metro_step(asystem &sys, size_t sweeps, size_t mcs, double beta = 2.5) {
   double e_move = 0.0;
 
-  for (int s = 0; s < sweeps; ++s) {
-    for (int n = 0; n < mcs; ++n) {
+  for (size_t s = 0; s < sweeps; s++) {
+    for (size_t n = 0; n < mcs; n++) {
       e_move = sys.start_update();
 
       if (e_move <= 0.0) {
@@ -140,7 +140,7 @@ inline intT& at_e(std::vector<intT> &histogram, mapping &e_map, double e) {
   } else if (e < e_map.min) {
     return histogram.front();
   } else {
-    int bin = int((e - e_map.min)/e_map.delta);
+    int bin = int(std::floor((e - e_map.min)/e_map.delta + 0.5));
     return histogram.at(bin);
   }
 }

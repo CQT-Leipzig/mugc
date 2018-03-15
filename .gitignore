@@ -1,2 +1,4 @@
+*.zip
 output
-run
+run*
+analysis

@@ -21,13 +21,13 @@ std::string string_printf(const std::string& format, Args ... args) {
 }
 
 template <typename intT>
-void write_histogram(const std::vector<intT> &histogram, std::string file_path) {
+void write_histogram(const std::vector<intT> &histogram, double e_min, double e_delta, std::string file_path) {
   std::ofstream file (file_path, std::ofstream::out);
   file << std::fixed;
   file << std::scientific;
-  file << "#N\tO" << std::endl;
+  file << "#E\tO" << std::endl;
   for (size_t i = 0; i<histogram.size(); i++) {
-    file << std::setprecision(1) << i << "\t";
+    file << std::setprecision(5) << e_min+i*e_delta << "\t";
     file << std::setprecision(15) << histogram.at(i) << std::endl;
   }
   file.close();
@@ -102,15 +102,15 @@ int main(int argc, char *argv[]) {
   bool do_snapshots = false;
   bool do_iterationfiles = false;
   std::string s_export_path = "";
-  std::string s_weight_path = "";
-  double beta = 2.5;
-  double L = 10.0;
-  size_t n_min = 0;
-  size_t n_max = -1;
+  size_t N = 100;
+  double e_min = 1.0;
+  double e_max = 0.0;
+  double e_delta = 1.0;
+  double rho = 0.02786;
   size_t w_therm = 50;
   size_t w_sweeps = 1e3;
-  size_t p_therm = 1e4;  // on each thread, needs to be much larger if importing weights
-  size_t p_sweeps = 1e6; // split amongst threads
+  size_t p_therm = 1e4;
+  size_t p_sweeps = 1e6;
   size_t mcs = -1;
   double hist_flat_crit = 0.35;
 
@@ -118,17 +118,15 @@ int main(int argc, char *argv[]) {
     if (i != argc) {
       // check arguments without parameter first
       if (std::string(argv[i]) == "--weightsonly")          do_production = false;
-      else if (std::string(argv[i]) == "--prodonly")        do_weights = false;
       else if (std::string(argv[i]) == "--snapshots")       do_snapshots = true;
       else if (std::string(argv[i]) == "--iterationfiles")  do_iterationfiles = true;
       else if (i+1 != argc) {
         // arguments with a following parameter value
         if (std::string(argv[i]) == "-o")             s_export_path = argv[i+1];
-        else if (std::string(argv[i]) == "-w")        s_weight_path = argv[i+1];
-        else if (std::string(argv[i]) == "-b")        beta = (double)atof(argv[i+1]);
-        else if (std::string(argv[i]) == "-l")        L = (double)atof(argv[i+1]);
-        else if (std::string(argv[i]) == "-nmax")     n_max = (size_t)atof(argv[i+1]);
-        else if (std::string(argv[i]) == "-nmin")     n_min = (size_t)atof(argv[i+1]);
+        else if (std::string(argv[i]) == "-n")        N = (size_t)atof(argv[i+1]);
+        else if (std::string(argv[i]) == "-rho")      rho = (double)atof(argv[i+1]);
+        else if (std::string(argv[i]) == "-emax")     e_max = (double)atof(argv[i+1]);
+        else if (std::string(argv[i]) == "-emin")     e_min = (double)atof(argv[i+1]);
         else if (std::string(argv[i]) == "-mcs")      mcs = (size_t)atof(argv[i+1]);
         else if (std::string(argv[i]) == "-wth")      w_therm = (size_t)atof(argv[i+1]);
         else if (std::string(argv[i]) == "-wsw")      w_sweeps = (size_t)atof(argv[i+1]);
@@ -144,32 +142,44 @@ int main(int argc, char *argv[]) {
   // ----------------------------------------------------------------- //
 
   if (s_export_path.length()==0) s_export_path = "./output/";
-  s_export_path += string_printf("/l%03.0f/", L);
+  s_export_path += string_printf("/n%04d/", N);
   std::string s_dir_cmd = "mkdir -p " + s_export_path;
   if (my_rank==0) system(s_dir_cmd.c_str());
   if (my_rank==0) printf("target directory: %s\n", s_export_path.c_str());
   if (my_rank==0 && do_iterationfiles) s_dir_cmd = "mkdir -p " + s_export_path + "/weight_hist/";
   if (my_rank==0 && do_iterationfiles) system(s_dir_cmd.c_str());
 
+  if (e_min == 1.0) e_min = -2.0*double(N);
+  if (mcs == -1) mcs=(size_t(pow(N,2)));
+  double L = pow(double(N)/rho,1.0/2.0);
+  #ifdef THREEDIM
+  L = pow(double(N)/rho,1.0/3.0);
+  #endif
+  if (my_rank==0) printf("N = %ld, L = %03.1f\n", N, L);
+  if (my_rank==0) printf("rho = %f\n", rho);
+  if (my_rank==0) printf("sweep size (mcs) = %ld\n", mcs);
+
   init_rng(100+my_rank);
   asystem sys = asystem(L);
 
-  if (n_max == -1) n_max = size_t(0.8*sys.system_volume());
-  if (mcs == -1) mcs=(size_t(pow(L,1.7))); // in 3D 2.5 scales better than 1.7
-  if (my_rank==0) printf("L = %03.1f\n", L);
-  if (my_rank==0) printf("beta = %f\n", beta);
-  if (my_rank==0) printf("sweep size (mcs) = %ld\n", mcs);
-  if (my_rank==0) printf("N range %ld to %ld\n", n_min, n_max);
+  for (int i = 0; i < N; i++) {
+    sys.ins_particle();
+    sys.accept_ins();
+  }
+  sys.reset_move_ar();
+  // avoid unphysical systems with very close particles
+  metro_step(sys, 1e3, N, 0.1);
 
-  std::vector<double> v_log_w(n_max+3, 0.0);
-  // init weights to set direction from where muca updates iterate
-  double mu_init = -5.0; // e.g. -20.0 in 3d, -10.0 in 2d
-  for (int i = 0; i < v_log_w.size(); i++) v_log_w.at(i)=mu_init*i;
-  std::vector<double> v_ratio(n_max+3, 1.0);
-  std::vector<double> v_fluct(n_max+3, 0.0);
+  mapping e_map;
+  e_map.max = e_max;
+  e_map.min = e_min;
+  e_map.delta = e_delta;
+  std::vector<double> v_log_w((e_map.max - e_map.min)/e_map.delta+1, 0.0);
+  std::vector<double> v_ratio(v_log_w.size(), 1.0);
+  std::vector<double> v_fluct(v_log_w.size(), 0.0);
   //if using advanced update scheme, initial ratios have to be obtained from initial/imported weights
-  std::vector<long long> v_global_hist(n_max+3, 0);
-  std::vector<long long> v_local_hist(n_max+3, 0);
+  std::vector<long long> v_global_hist(v_log_w.size(), 0);
+  std::vector<long long> v_local_hist(v_log_w.size(), 0);
   long long local_tunnel_events = 0;
   long long global_tunnel_total, global_tunnel_max, global_tunnel_min;
   int tunnel_pos = 0;
@@ -187,17 +197,17 @@ int main(int argc, char *argv[]) {
       MPI_Barrier(MPI_COMM_WORLD);
       MPI_Bcast(v_log_w.data(), v_log_w.size(), MPI_DOUBLE, 0, MPI_COMM_WORLD);
       // update amount of statistics
-      if (reached_bins < n_max - n_min) {
+      if (reached_bins < v_log_w.size()-1) {
         w_sweeps = fmax(w_sweeps,1e5*reached_bins/mcs/num_threads);
       } else {
         w_sweeps *= 1.1;
       }
       if (my_rank==0) printf("%04ld, mcs: %lu, threads: %u, sweeps per thread therm: %lu, hist: %lu\n", m, mcs, num_threads, w_therm, w_sweeps);
       // thermalise
-      mugc_step(sys, w_therm, mcs, beta, v_log_w, v_local_hist, n_min, n_max, local_tunnel_events, tunnel_pos);
+      muca_step(sys, w_therm, mcs, v_log_w, v_local_hist, e_map, local_tunnel_events, tunnel_pos);
       for (int i = 0; i < v_local_hist.size(); i++) v_local_hist.at(i) = 0;
       // fill histograms for iteration step
-      mugc_step(sys, w_sweeps, mcs, beta, v_log_w, v_local_hist, n_min, n_max, local_tunnel_events, tunnel_pos);
+      muca_step(sys, w_sweeps, mcs, v_log_w, v_local_hist, e_map, local_tunnel_events, tunnel_pos);
       MPI_Barrier(MPI_COMM_WORLD);
       MPI_Reduce(v_local_hist.data(), v_global_hist.data(), v_local_hist.size(), MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
       MPI_Reduce(&local_tunnel_events, &global_tunnel_total, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
@@ -208,10 +218,10 @@ int main(int argc, char *argv[]) {
 
       if (my_rank==0) {
         double flatness = 0.0;
-        if (check_flatness_naive(v_global_hist, flatness, n_min, n_max, hist_flat_crit)) {
+        if (check_flatness_naive(v_global_hist, flatness, 0, v_log_w.size()-1, hist_flat_crit)) {
           converged = 1;
         };
-        printf("\tflatness between %ld and %ld\t%d with %2.1f%%\n", n_min, n_max, converged, flatness);
+        printf("\tflatness between %d and %ld\t%d with %2.1f%%\n", 0, v_log_w.size()-1, converged, flatness);
         size_t start,end;
         get_histogram_range(v_global_hist, start, end);
         size_t reached_bins_new = end-start;
@@ -222,8 +232,8 @@ int main(int argc, char *argv[]) {
       MPI_Barrier(MPI_COMM_WORLD);
 
       if (my_rank == 0 && do_iterationfiles) {
-        write_histogram(v_log_w, s_export_path + string_printf("/weight_hist/log_w_%04d.dat",m));
-        write_histogram(v_global_hist, s_export_path + string_printf("/weight_hist/hits_%04d.dat",m));
+        write_histogram(v_log_w, e_map.min, e_map.delta, s_export_path + string_printf("/weight_hist/log_w_%04d.dat",m));
+        write_histogram(v_global_hist, e_map.min, e_map.delta, s_export_path + string_printf("/weight_hist/hits_%04d.dat",m));
       }
 
       // Broadcast convergence state to all ranks
@@ -233,40 +243,22 @@ int main(int argc, char *argv[]) {
 
       if (my_rank == 0) {
         update_weights(v_log_w, v_global_hist);
+        // update_weights_advanced(v_fluct, v_ratio, v_log_w, v_global_hist);
         print_time_since(start_time);
       }
     }
 
     if (my_rank == 0) {
-      write_histogram(v_log_w, s_export_path + "log_w_final.dat");
-      write_histogram(v_global_hist, s_export_path + "hits_weight_iteration.dat");
+      write_histogram(v_log_w, e_map.min, e_map.delta, s_export_path + "log_w_final.dat");
+      write_histogram(v_global_hist, e_map.min, e_map.delta, s_export_path + "hits_weight_iteration.dat");
     }
-  }
-
-  // ----------------------------------------------------------------- //
-  // import weights if no iteration wanted and weights already present //
-  // ----------------------------------------------------------------- //
-
-  if (!do_weights) {
-    if (s_weight_path.length()==0) s_weight_path = s_export_path + "/log_w_final.dat";
-    if (my_rank==0) {
-      printf("importing weights from: %s\n", s_weight_path.c_str());
-      std::ifstream test_file(s_weight_path);
-      if (!test_file.good()) {
-        printf("file broken or does not exist, aborting\n");
-        MPI_Abort(MPI_COMM_WORLD, -1);
-      }
-      read_histogram(v_log_w, s_weight_path);
-    }
-    MPI_Barrier(MPI_COMM_WORLD);
-    MPI_Bcast(v_log_w.data(), v_log_w.size(), MPI_DOUBLE, 0, MPI_COMM_WORLD);
   }
 
   // ----------------------------------------------------------------- //
   // prduction run //
   // ----------------------------------------------------------------- //
 
-  std::vector<bool> exported_state(n_max+1, !do_snapshots);
+  std::vector<int> exported_state(v_log_w.size(), int(!do_snapshots));
 
   if (do_production) {
     if (my_rank==0) {
@@ -282,17 +274,15 @@ int main(int argc, char *argv[]) {
     std::ofstream timeseries;
     timeseries.open(s_export_path+string_printf("/production_ts/therm_%03d.dat",my_rank), std::ofstream::out);
     timeseries << std::fixed << std::setprecision(1);
-    timeseries << "#N\t" << "LargestCluster\t" << "Energy\n";
-    for (size_t i = 0; i<p_therm; i++) {
-      mugc_step(sys, 1, mcs, beta, v_log_w, v_local_hist, n_min, n_max, local_tunnel_events, tunnel_pos);
-      size_t n = sys.particles.size();
-      size_t c = sys.cluster_size();
+    timeseries << "#Energy\t" << "LargestCluster\n";
+    for (size_t i = 0; i<p_therm; i+=num_threads) {
+      muca_step(sys, 1, mcs, v_log_w, v_local_hist, e_map, local_tunnel_events, tunnel_pos);
       double e = sys.system_energy();
-      timeseries << std::fixed << std::setprecision(1);
-      timeseries << n << "\t";
-      timeseries << c << "\t";
+      size_t c = sys.cluster_size();
       timeseries << std::fixed << std::setprecision(7);
-      timeseries << e << "\n";
+      timeseries << e << "\t";
+      timeseries << std::fixed << std::setprecision(1);
+      timeseries << c << "\n";
     }
     timeseries.close();
     timeseries.clear();
@@ -308,23 +298,21 @@ int main(int argc, char *argv[]) {
 
     timeseries.open(s_export_path+string_printf("/production_ts/prod_%03d.dat",my_rank), std::ofstream::out);
     timeseries << std::fixed << std::setprecision(1);
-    timeseries << "#N\t" << "LargestCluster\t" << "Energy\n";
+    timeseries << "#Energy\t" << "LargestCluster\n";
     for (size_t i = 0; i<p_sweeps; i+=num_threads) {
-      mugc_step(sys, 1, mcs, beta, v_log_w, v_local_hist, n_min, n_max, local_tunnel_events, tunnel_pos);
-      size_t n = sys.particles.size();
-      size_t c = sys.cluster_size();
+      muca_step(sys, 1, mcs, v_log_w, v_local_hist, e_map, local_tunnel_events, tunnel_pos);
       double e = sys.system_energy();
-      timeseries << std::fixed << std::setprecision(1);
-      timeseries << n << "\t";
-      timeseries << c << "\t";
+      size_t c = sys.cluster_size();
       timeseries << std::fixed << std::setprecision(7);
-      timeseries << e << "\n";
+      timeseries << e << "\t";
+      timeseries << std::fixed << std::setprecision(1);
+      timeseries << c << "\n";
 
       // snapshots from rank 0 and logging
       if (my_rank == 0) {
-        if (!exported_state.at(n)) {
-          sys.export_config(s_export_path+string_printf("/snapshots/n_%05d.dat",int(n)));
-          exported_state.at(n) = true;
+        if (!at_e(exported_state, e_map, e)) {
+          sys.export_config(s_export_path+string_printf("/snapshots/e_%05.0f.dat",e));
+          at_e(exported_state, e_map, e) = 1;
         }
 
         clock_t now = clock();
@@ -351,9 +339,9 @@ int main(int argc, char *argv[]) {
     timeseries.clear();
   }
 
-  write_histogram(v_local_hist, s_export_path + string_printf("/production_hist/hist_%03d.dat", my_rank));
+  write_histogram(v_local_hist, e_map.min, e_map.delta, s_export_path + string_printf("/production_hist/hist_%03d.dat", my_rank));
 
-  if (my_rank == 0) printf("waiting for all threads to finish\n");
+  if (my_rank == 0) printf ("waiting for all threads to finish");
 
   MPI_Barrier(MPI_COMM_WORLD);
   MPI_Reduce(v_local_hist.data(), v_global_hist.data(), v_local_hist.size(), MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
@@ -362,7 +350,7 @@ int main(int argc, char *argv[]) {
   MPI_Reduce(&local_tunnel_events, &global_tunnel_max, 1, MPI_UNSIGNED_LONG_LONG, MPI_MAX, 0, MPI_COMM_WORLD);
 
   if (my_rank==0) {
-    write_histogram(v_global_hist, s_export_path + "hits_production.dat");
+    write_histogram(v_global_hist, e_map.min, e_map.delta, s_export_path + "hits_production.dat");
     printf("\nproduction finished\n");
     printf("tunnel events, total: %lld, min: %lld, max: %lld\n", global_tunnel_total, global_tunnel_min, global_tunnel_max);
     print_time_since(start_time);

@@ -1,4 +1,4 @@
-// #define THREEDIM
+#define THREEDIM
 
 #include <fstream>      // std::ofstream
 #include <iostream>     // std::cout, std::fixed
