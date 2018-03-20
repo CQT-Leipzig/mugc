@@ -106,7 +106,8 @@ int main(int argc, char *argv[]) {
   double e_min = 1.0;
   double e_max = 0.0;
   double e_delta = 1.0;
-  double rho = 0.02786;
+  double beta_init = 0.0;
+  double rho = 0.027857;
   size_t w_therm = 50;
   size_t w_sweeps = 1e3;
   size_t p_therm = 1e4;
@@ -166,9 +167,10 @@ int main(int argc, char *argv[]) {
     sys.ins_particle();
     sys.accept_ins();
   }
-  sys.reset_move_ar();
   // avoid unphysical systems with very close particles
-  metro_step(sys, 1e3, N, 0.1);
+  // metro_step(sys, 1e2, N*N, 0.1);
+  sys.init_gas_state();
+  sys.reset_move_ar();
 
   mapping e_map;
   e_map.max = e_max;
@@ -177,6 +179,7 @@ int main(int argc, char *argv[]) {
   std::vector<double> v_log_w((e_map.max - e_map.min)/e_map.delta+1, 0.0);
   std::vector<double> v_ratio(v_log_w.size(), 1.0);
   std::vector<double> v_fluct(v_log_w.size(), 0.0);
+  for (int i = 0; i < v_log_w.size(); i++) v_log_w.at(i) = -beta_init*i;
   //if using advanced update scheme, initial ratios have to be obtained from initial/imported weights
   std::vector<long long> v_global_hist(v_log_w.size(), 0);
   std::vector<long long> v_local_hist(v_log_w.size(), 0);
@@ -289,7 +292,7 @@ int main(int argc, char *argv[]) {
 
     if (my_rank==0) printf("starting production run\n");
 
-    float print_hours = 1.0;
+    float print_hours = 6.0;
     clock_t delta_t = clock();
     int printed = 0;
     int crossed_tenth = p_sweeps/10;

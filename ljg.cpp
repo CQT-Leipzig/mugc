@@ -1,4 +1,4 @@
-#define THREEDIM
+// #define THREEDIM
 
 #include <fstream>      // std::ofstream
 #include <iostream>     // std::cout, std::fixed
@@ -258,6 +258,16 @@ class asystem {
       volume *= L;
       #endif
       return volume;
+    }
+
+    void init_gas_state() {
+      for (int i = 0; i < particles.size(); i++) {
+        particle *p = particles.at(i);
+        while (particle_energy(p) > 0.0) {
+          jump_particle(p);
+          accept_jump();
+        }
+      }
     }
 
     // ----------------------------------------------------------------- //
