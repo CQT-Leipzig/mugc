@@ -113,6 +113,7 @@ int main(int argc, char *argv[]) {
   size_t p_therm = 1e4;
   size_t p_sweeps = 1e6;
   size_t mcs = -1;
+  size_t pmcs = -1;
   double hist_flat_crit = 0.35;
 
   for (int i=0; i<argc; i++) {
@@ -129,6 +130,7 @@ int main(int argc, char *argv[]) {
         else if (std::string(argv[i]) == "-emax")     e_max = (double)atof(argv[i+1]);
         else if (std::string(argv[i]) == "-emin")     e_min = (double)atof(argv[i+1]);
         else if (std::string(argv[i]) == "-mcs")      mcs = (size_t)atof(argv[i+1]);
+        else if (std::string(argv[i]) == "-pmcs")     pmcs = (size_t)atof(argv[i+1]);
         else if (std::string(argv[i]) == "-wth")      w_therm = (size_t)atof(argv[i+1]);
         else if (std::string(argv[i]) == "-wsw")      w_sweeps = (size_t)atof(argv[i+1]);
         else if (std::string(argv[i]) == "-pth")      p_therm = (size_t)atof(argv[i+1]);
@@ -290,7 +292,12 @@ int main(int argc, char *argv[]) {
     timeseries.close();
     timeseries.clear();
 
-    if (my_rank==0) printf("starting production run\n");
+    if (pmcs != -1) mcs = pmcs;
+    if (my_rank==0) {
+      if (pmcs != -1) printf("adjusting mcs for production run to %ld\n", mcs);
+      printf("starting production run\n");
+    }
+
 
     float print_hours = 6.0;
     clock_t delta_t = clock();
