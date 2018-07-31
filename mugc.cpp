@@ -175,6 +175,15 @@ int main(int argc, char *argv[]) {
   int tunnel_pos = 0;
   size_t reached_bins = 1;
   clock_t start_time = clock();
+  
+  for (int i = 0; i < n_min; i++) {
+    sys.ins_particle();
+    sys.accept_ins();
+  }
+  // avoid unphysical systems with very close particles
+  // metro_step(sys, 1e2, N*N, 0.1);
+  sys.init_gas_state();
+  sys.reset_move_ar();
 
   // ----------------------------------------------------------------- //
   // weight iteration //
